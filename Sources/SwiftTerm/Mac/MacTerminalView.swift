@@ -99,7 +99,15 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     private var lastProgressValue: UInt8?
 
     var selection: SelectionService!
-    private var scroller: NSScroller!
+
+    /// The NSScrollView that hosts this TerminalView as its documentView.
+    /// Callers (e.g. Addy) should add `scrollView` to their view hierarchy
+    /// instead of adding the TerminalView directly.
+    public private(set) var scrollView: NSScrollView!
+
+    /// Guard flag to prevent feedback loops between programmatic scroll
+    /// position updates and the boundsDidChange notification observer.
+    private var isUpdatingScrollPosition = false
     
     // Attribute dictionary, maps a console attribute (color, flags) to the corresponding dictionary
     // of attributes for an NSAttributedString
@@ -167,7 +175,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         if #available(macOS 14, *) {
             self.clipsToBounds = true
         }
-        setupScroller()
+        setupScrollView()
         setupOptions()
         setupProgressBar()
         setupFocusNotification()
@@ -208,8 +216,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     private func setupProgressBar() {
         let bar = TerminalProgressBarView(frame: .zero)
         bar.isHidden = true
-        if let scroller {
-            addSubview(bar, positioned: .above, relativeTo: scroller)
+        // Float the progress bar on the scroll view (not the document view)
+        // so it stays pinned at the top of the visible area
+        if let scrollView {
+            scrollView.addSubview(bar, positioned: .above, relativeTo: nil)
         } else {
             addSubview(bar)
         }
@@ -220,7 +230,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     private func updateProgressBarFrame() {
         guard let progressBarView else { return }
         let height: CGFloat = 2
-        progressBarView.frame = CGRect(x: 0, y: bounds.height - height, width: bounds.width, height: height)
+        let container = scrollView?.bounds ?? bounds
+        progressBarView.frame = CGRect(x: 0, y: container.height - height, width: container.width, height: height)
     }
 
     private func resolveProgress(for report: Terminal.ProgressReport) -> UInt8? {
@@ -268,7 +279,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     func setupOptions ()
     {
-        setupOptions (width: getEffectiveWidth (size: bounds.size), height: bounds.height)
+        let size = viewportSize
+        setupOptions (width: getEffectiveWidth (size: size), height: size.height)
         layer?.backgroundColor = nativeBackgroundColor.cgColor
     }
 
@@ -357,61 +369,120 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     }
     
-    @objc
-    func scrollerActivated ()
-    {
-        switch scroller.hitPart {
-        case .decrementPage:
-            pageUp()
-            scroller.doubleValue =  scrollPosition
-        case .incrementPage:
-            pageDown()
-            scroller.doubleValue =  scrollPosition
-        case .knob:
-            scroll(toPosition: scroller.doubleValue)
-        case .knobSlot:
-            print ("Scroller .knobSlot clicked")
-        case .noPart:
-            print ("Scroller .noPart clicked")
-        case .decrementLine:
-            print ("Scroller .decrementLine clicked")
-        case .incrementLine:
-            print ("Scroller .incrementLine clicked")
-        default:
-            print ("Scroller: New value introduced")
+    // MARK: - NSScrollView Integration
+
+    /// Total document height based on all lines in the buffer.
+    var documentHeight: CGFloat {
+        guard let terminal else { return frame.height }
+        let totalLines = terminal.displayBuffer.lines.count
+        return CGFloat(totalLines) * cellDimension.height
+    }
+
+    /// The visible viewport size (what the user actually sees).
+    var viewportSize: CGSize {
+        scrollView?.contentView.bounds.size ?? bounds.size
+    }
+
+    func setupScrollView() {
+        let sv = NSScrollView(frame: bounds)
+        sv.drawsBackground = false
+        sv.hasVerticalScroller = true
+        sv.hasHorizontalScroller = false
+        sv.scrollerStyle = .overlay
+        sv.autohidesScrollers = true
+        sv.scrollerKnobStyle = .light
+        sv.documentView = self
+        sv.contentView.postsBoundsChangedNotifications = true
+        sv.contentView.postsFrameChangedNotifications = true
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollViewBoundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: sv.contentView)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(scrollViewFrameDidChange(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: sv.contentView)
+
+        self.scrollView = sv
+    }
+
+    /// Resize the document (self) to reflect the total scrollback content.
+    func updateDocumentFrame() {
+        guard let terminal else { return }
+        let totalLines = terminal.displayBuffer.lines.count
+        let newHeight = max(CGFloat(totalLines) * cellDimension.height,
+                           viewportSize.height)
+        let newWidth = viewportSize.width
+        let newSize = NSSize(width: newWidth, height: newHeight)
+        if frame.size != newSize {
+            isUpdatingScrollPosition = true
+            setFrameSize(newSize)
+            isUpdatingScrollPosition = false
         }
     }
 
-    let scrollerStyle: NSScroller.Style = .overlay
-    func getScrollerFrame() -> CGRect {
-        let scrollerWidth = NSScroller.scrollerWidth(for: .regular, scrollerStyle: scrollerStyle)
-        return NSRect(x: bounds.maxX - scrollerWidth, y: 0, width: scrollerWidth, height: bounds.height)
+    /// Drive the NSScrollView's scroll position to match the current yDisp.
+    func syncScrollPositionFromYDisp() {
+        guard let terminal, let scrollView, cellDimension.height > 0 else { return }
+        isUpdatingScrollPosition = true
+        defer { isUpdatingScrollPosition = false }
+
+        let displayBuffer = terminal.displayBuffer
+
+        // Alternate buffer or no scrollback: pin to live bottom
+        if terminal.isDisplayBufferAlternate || !canScroll {
+            let liveOrigin = CGPoint(x: 0, y: max(0, documentHeight - viewportSize.height))
+            scrollView.contentView.scroll(to: liveOrigin)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            return
+        }
+
+        // Normal buffer: convert yDisp to pixel position.
+        // y=0 in our unflipped view is the oldest content (top of scrollback).
+        // yDisp=0 means "show the oldest lines" → scroll to the top (y near 0).
+        // yDisp=maxScrollback means "show the live bottom" → scroll to max y.
+        let maxScrollback = max(0, displayBuffer.lines.count - displayBuffer.rows)
+        let linesFromTop = displayBuffer.yDisp
+        let originY = CGFloat(linesFromTop) * cellDimension.height
+        let clampedY = max(0, min(originY, documentHeight - viewportSize.height))
+        scrollView.contentView.scroll(to: CGPoint(x: 0, y: clampedY))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    func setupScroller()
-    {
-        let scrollerFrame = getScrollerFrame()
-        if scroller == nil {
-            scroller = NSScroller(frame: scrollerFrame)
-        } else {
-            scroller?.frame = scrollerFrame
+    /// Called when the user scrolls (NSScrollView moves the clipView bounds).
+    @objc func scrollViewBoundsDidChange(_ notification: Notification) {
+        guard !isUpdatingScrollPosition, let terminal else { return }
+        let displayBuffer = terminal.displayBuffer
+
+        // Don't process scroll during alternate buffer
+        if terminal.isDisplayBufferAlternate { return }
+
+        let visibleOriginY = scrollView.contentView.bounds.origin.y
+        // Convert pixel position to line offset
+        let newYDisp = max(0, min(Int(visibleOriginY / cellDimension.height),
+                                  displayBuffer.lines.count - displayBuffer.rows))
+
+        if newYDisp != displayBuffer.yDisp {
+            terminal.setViewYDisp(newYDisp)
+            terminal.refresh(startRow: 0, endRow: terminal.rows)
+            updateDisplay(notifyAccessibility: false)
+            terminalDelegate?.scrolled(source: self, position: scrollPosition)
         }
-        scroller.autoresizingMask = [.minXMargin, .height]
-        scroller.scrollerStyle = scrollerStyle
-        scroller.knobProportion = 0.1
-        scroller.isEnabled = false
-        // Overlay scrollbars start hidden and appear on scroll activity
-        scroller.alphaValue = 0
-        addSubview (scroller)
-        if let progressBarView {
-            addSubview(progressBarView, positioned: .above, relativeTo: scroller)
-        }
-        scroller.action = #selector(scrollerActivated)
-        scroller.target = self
     }
 
-    func updateScrollerFrame() {
-        scroller?.frame = getScrollerFrame()
+    /// Called when the viewport (clipView) resizes — e.g. window resize.
+    @objc func scrollViewFrameDidChange(_ notification: Notification) {
+        let visibleSize = viewportSize
+        if processSizeChange(newSize: visibleSize) {
+            updateDocumentFrame()
+            syncScrollPositionFromYDisp()
+        }
+        updateCursorPosition()
+        updateProgressBarFrame()
     }
 
     /// This method sents the `nativeForegroundColor` and `nativeBackgroundColor`
@@ -423,7 +494,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     open func bufferActivated(source: Terminal) {
-        updateScroller ()
+        updateDocumentFrame()
+        syncScrollPositionFromYDisp()
+        // Disable scrollbar for alternate buffer (vim, less, etc.)
+        scrollView?.hasVerticalScroller = !terminal.isDisplayBufferAlternate
     }
     
     open func send(source: Terminal, data: ArraySlice<UInt8>) {
@@ -440,8 +514,6 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     func getEffectiveWidth (size: CGSize) -> CGFloat
     {
-        // Overlay scrollbars draw over content — don't reserve width for them.
-        // This gives the terminal the full view width for column calculation.
         return size.width
     }
     
@@ -472,9 +544,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     func updateScroller () {
-        scroller.isEnabled = canScroll
-        scroller.doubleValue = scrollPosition
-        scroller.knobProportion = scrollThumbsize
+        updateDocumentFrame()
+        syncScrollPositionFromYDisp()
     }
     
     var userScrolling = false
@@ -519,17 +590,15 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     open override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        updateScrollerFrame()
+        // Don't call processSizeChange here — viewport resize is driven
+        // by scrollViewFrameDidChange. This setFrameSize is called by
+        // updateDocumentFrame() to resize the document, not the viewport.
         updateCursorPosition()
-        updateProgressBarFrame()
-        processSizeChange(newSize: frame.size)
     }
 
     public override func resizeSubviews(withOldSize oldSize: NSSize) {
         super.resizeSubviews(withOldSize: oldSize)
-        updateScroller()
         selection.active = false
-        updateProgressBarFrame()
     }
     
     private var _hasFocus = false
@@ -585,7 +654,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     func startTracking ()
     {
         if tracking == nil {
-            tracking = NSTrackingArea (rect: frame, options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited], owner: self, userInfo: [:])
+            // Use .inVisibleRect so the tracking area automatically adjusts
+            // to the visible portion of this documentView inside the scroll view.
+            tracking = NSTrackingArea (rect: .zero, options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect], owner: self, userInfo: [:])
             addTrackingArea(tracking!)
         }
     }
@@ -1199,16 +1270,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
-    /// Accumulated fractional scroll delta (in lines) for smooth trackpad scrolling.
-    /// This lets sub-line deltas accumulate until they cross a whole-line threshold,
-    /// producing smooth, native-feeling scroll behavior.
-    private var scrollDeltaAccumulator: CGFloat = 0
-
     public override func scrollWheel(with event: NSEvent) {
-        if event.deltaY == 0 && event.scrollingDeltaY == 0 {
-            return
-        }
-
         // If the application running in the terminal wants mouse events,
         // forward scroll events to it instead of scrolling the buffer.
         if allowMouseReporting && terminal.mouseMode.sendButtonPress() {
@@ -1217,57 +1279,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             terminal.sendEvent(buttonFlags: button, x: hit.grid.col, y: hit.grid.row, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
             return
         }
-
-        // Flash the overlay scroller so the user sees their position
-        scroller.alphaValue = 1
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 1.0
-        }, completionHandler: { [weak self] in
-            NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.3
-                self?.scroller.animator().alphaValue = 0
-            })
-        })
-
-        // Discrete mouse wheel (no phase, no momentum) — use the old step approach
-        let isDiscreteWheel = !event.hasPreciseScrollingDeltas
-        if isDiscreteWheel {
-            let lines = max(1, Int(abs(event.scrollingDeltaY) / 3))
-            if event.scrollingDeltaY > 0 {
-                scrollUp(lines: lines)
-            } else {
-                scrollDown(lines: lines)
-            }
-            return
-        }
-
-        // Trackpad / precise scrolling — use system-accelerated delta with
-        // fractional accumulation for smooth, native-feeling momentum.
-        let pixelDelta = event.scrollingDeltaY
-        let lineDelta = pixelDelta / cellDimension.height
-        scrollDeltaAccumulator += lineDelta
-
-        // Reset accumulator when a new gesture begins
-        if event.phase == .began {
-            scrollDeltaAccumulator = lineDelta
-        }
-
-        // Consume whole lines from the accumulator
-        let wholeLines = Int(scrollDeltaAccumulator)
-        if wholeLines != 0 {
-            scrollDeltaAccumulator -= CGFloat(wholeLines)
-            if wholeLines > 0 {
-                scrollUp(lines: wholeLines)
-            } else {
-                scrollDown(lines: -wholeLines)
-            }
-        }
-
-        // Reset accumulator when the gesture ends (including momentum end)
-        if event.phase == .ended || event.phase == .cancelled ||
-           event.momentumPhase == .ended || event.momentumPhase == .cancelled {
-            scrollDeltaAccumulator = 0
-        }
+        // Let NSScrollView handle everything: momentum, rubber-band,
+        // overlay scrollbars, reduced-motion, accessibility.
+        super.scrollWheel(with: event)
     }
     
     /// Velocity for drag-selection auto-scroll (when dragging past the terminal edges).

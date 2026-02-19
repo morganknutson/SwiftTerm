@@ -189,8 +189,8 @@ open class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, LocalPr
      */
     open func getWindowSize () -> winsize
     {
-        let f: CGRect = self.frame
-        return winsize(ws_row: UInt16(terminal.rows), ws_col: UInt16(terminal.cols), ws_xpixel: UInt16 (f.width), ws_ypixel: UInt16 (f.height))
+        let visibleSize = scrollView?.contentView.bounds.size ?? frame.size
+        return winsize(ws_row: UInt16(terminal.rows), ws_col: UInt16(terminal.cols), ws_xpixel: UInt16 (visibleSize.width), ws_ypixel: UInt16 (visibleSize.height))
     }
 }
 

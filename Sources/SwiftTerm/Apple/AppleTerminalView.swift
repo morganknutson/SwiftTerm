@@ -72,8 +72,15 @@ extension TerminalView {
     {
         resetCaches()
         self.cellDimension = computeFontDimensions ()
+        #if os(macOS)
+        // Use the visible viewport size, not the document frame
+        let visibleSize = scrollView?.contentView.bounds.size ?? frame.size
+        let newCols = Int(visibleSize.width / cellDimension.width)
+        let newRows = Int(visibleSize.height / cellDimension.height)
+        #else
         let newCols = Int(frame.width / cellDimension.width)
         let newRows = Int(frame.height / cellDimension.height)
+        #endif
         resize(cols: newCols, rows: newRows)
         updateCaretView()
     }
