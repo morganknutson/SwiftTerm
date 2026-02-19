@@ -382,7 +382,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
-    let scrollerStyle: NSScroller.Style = .legacy
+    let scrollerStyle: NSScroller.Style = .overlay
     func getScrollerFrame() -> CGRect {
         let scrollerWidth = NSScroller.scrollerWidth(for: .regular, scrollerStyle: scrollerStyle)
         return NSRect(x: bounds.maxX - scrollerWidth, y: 0, width: scrollerWidth, height: bounds.height)
@@ -400,6 +400,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         scroller.scrollerStyle = scrollerStyle
         scroller.knobProportion = 0.1
         scroller.isEnabled = false
+        // Overlay scrollbars start hidden and appear on scroll activity
+        scroller.alphaValue = 0
         addSubview (scroller)
         if let progressBarView {
             addSubview(progressBarView, positioned: .above, relativeTo: scroller)
@@ -433,12 +435,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
      */
     open func getOptimalFrameSize () -> NSRect
     {
-        return NSRect (x: 0, y: 0, width: cellDimension.width * CGFloat(terminal.cols) + scroller.frame.width, height: cellDimension.height * CGFloat(terminal.rows))
+        return NSRect (x: 0, y: 0, width: cellDimension.width * CGFloat(terminal.cols), height: cellDimension.height * CGFloat(terminal.rows))
     }
     
     func getEffectiveWidth (size: CGSize) -> CGFloat
     {
-        return (size.width-scroller.frame.width)
+        // Overlay scrollbars draw over content — don't reserve width for them.
+        // This gives the terminal the full view width for column calculation.
+        return size.width
     }
     
     open func scrolled(source terminal: Terminal, yDisp: Int) {
@@ -1109,9 +1113,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let screenRow = hit.row - displayBuffer.yDisp
         if selection.active {
             if screenRow <= 0 {
-                autoScrollDelta = calcScrollingVelocity(delta: screenRow * -1) * -1
+                autoScrollDelta = autoScrollVelocity(delta: screenRow * -1) * -1
             } else if screenRow >= displayBuffer.rows {
-                autoScrollDelta = calcScrollingVelocity(delta: screenRow - displayBuffer.rows)
+                autoScrollDelta = autoScrollVelocity(delta: screenRow - displayBuffer.rows)
             }
         }
         setNeedsDisplay(bounds)
@@ -1195,32 +1199,85 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    /// Accumulated fractional scroll delta (in lines) for smooth trackpad scrolling.
+    /// This lets sub-line deltas accumulate until they cross a whole-line threshold,
+    /// producing smooth, native-feeling scroll behavior.
+    private var scrollDeltaAccumulator: CGFloat = 0
+
     public override func scrollWheel(with event: NSEvent) {
-        if event.deltaY == 0 {
+        if event.deltaY == 0 && event.scrollingDeltaY == 0 {
             return
         }
-        let velocity = calcScrollingVelocity(delta: Int (abs (event.deltaY)))
-        if event.deltaY > 0 {
-            scrollUp (lines: velocity)
-        } else {
-            scrollDown(lines: velocity)
+
+        // If the application running in the terminal wants mouse events,
+        // forward scroll events to it instead of scrolling the buffer.
+        if allowMouseReporting && terminal.mouseMode.sendButtonPress() {
+            let hit = calculateMouseHit(with: event)
+            let button = event.deltaY > 0 ? 64 : 65
+            terminal.sendEvent(buttonFlags: button, x: hit.grid.col, y: hit.grid.row, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+            return
+        }
+
+        // Flash the overlay scroller so the user sees their position
+        scroller.alphaValue = 1
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 1.0
+        }, completionHandler: { [weak self] in
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.3
+                self?.scroller.animator().alphaValue = 0
+            })
+        })
+
+        // Discrete mouse wheel (no phase, no momentum) — use the old step approach
+        let isDiscreteWheel = !event.hasPreciseScrollingDeltas
+        if isDiscreteWheel {
+            let lines = max(1, Int(abs(event.scrollingDeltaY) / 3))
+            if event.scrollingDeltaY > 0 {
+                scrollUp(lines: lines)
+            } else {
+                scrollDown(lines: lines)
+            }
+            return
+        }
+
+        // Trackpad / precise scrolling — use system-accelerated delta with
+        // fractional accumulation for smooth, native-feeling momentum.
+        let pixelDelta = event.scrollingDeltaY
+        let lineDelta = pixelDelta / cellDimension.height
+        scrollDeltaAccumulator += lineDelta
+
+        // Reset accumulator when a new gesture begins
+        if event.phase == .began {
+            scrollDeltaAccumulator = lineDelta
+        }
+
+        // Consume whole lines from the accumulator
+        let wholeLines = Int(scrollDeltaAccumulator)
+        if wholeLines != 0 {
+            scrollDeltaAccumulator -= CGFloat(wholeLines)
+            if wholeLines > 0 {
+                scrollUp(lines: wholeLines)
+            } else {
+                scrollDown(lines: -wholeLines)
+            }
+        }
+
+        // Reset accumulator when the gesture ends (including momentum end)
+        if event.phase == .ended || event.phase == .cancelled ||
+           event.momentumPhase == .ended || event.momentumPhase == .cancelled {
+            scrollDeltaAccumulator = 0
         }
     }
     
-    private func calcScrollingVelocity (delta: Int) -> Int
-    {
-        if delta > 9 {
-            return max (terminal.rows, 20)
-        }
-        if delta > 5 {
-            return 10
-        }
-        if delta > 1 {
-            return 3
-        }
+    /// Velocity for drag-selection auto-scroll (when dragging past the terminal edges).
+    private func autoScrollVelocity(delta: Int) -> Int {
+        if delta > 9 { return max(terminal.rows, 20) }
+        if delta > 5 { return 10 }
+        if delta > 1 { return 3 }
         return 1
     }
-    
+
     public override func resetCursorRects() {
         addCursorRect(bounds, cursor: .iBeam)
     }
