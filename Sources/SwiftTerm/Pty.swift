@@ -68,24 +68,62 @@ public class PseudoTerminalHelpers {
     public static func fork (andExec: String, args: [String], env: [String], currentDirectory: String? = nil, desiredWindowSize: inout winsize) -> (pid: pid_t, masterFd: Int32)?
     {
         var master: Int32 = 0
-        
+
+        // Pre-allocate all C strings BEFORE fork() using raw C memory.
+        // After fork() in a multi-threaded process, the child must only call
+        // async-signal-safe functions before exec(). Swift runtime operations
+        // (generics, protocol conformance, Array/String manipulation) use
+        // os_unfair_lock internally and will crash if another thread held
+        // the lock at the moment of fork().
+
+        let cExec = strdup(andExec)
+        guard let cExec else { return nil }
+
+        let cDir: UnsafeMutablePointer<CChar>? = currentDirectory.flatMap { strdup($0) }
+
+        // Build argv as a raw C array: [arg0, arg1, ..., NULL]
+        let argv = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: args.count + 1)
+        for (i, arg) in args.enumerated() {
+            argv[i] = strdup(arg)
+        }
+        argv[args.count] = nil
+
+        // Build envp as a raw C array: [env0, env1, ..., NULL]
+        let envp = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(capacity: env.count + 1)
+        for (i, e) in env.enumerated() {
+            envp[i] = strdup(e)
+        }
+        envp[env.count] = nil
+
         let pid = forkpty(&master, nil, nil, &desiredWindowSize)
         if pid < 0 {
+            free(cExec)
+            free(cDir)
+            for i in 0..<args.count { free(argv[i]) }
+            argv.deallocate()
+            for i in 0..<env.count { free(envp[i]) }
+            envp.deallocate()
             return nil
         }
         if pid == 0 {
-            if let currentDirectory {
-                _ = currentDirectory.withCString { p in
-                    chdir(p)
-                }
+            // CHILD SIDE — only async-signal-safe functions from here to exec.
+            // Do NOT use any Swift runtime features (Array, String, generics,
+            // closures, protocol witnesses, etc.) — they may deadlock.
+            if let d = cDir {
+                chdir(d)
             }
-            
-            withArrayOfCStrings(args, { pargs in
-                withArrayOfCStrings(env, { penv in
-                    let _ = execve(andExec, pargs, penv)
-                })
-            })
+            execve(cExec, argv, envp)
+            _exit(1)
         }
+
+        // PARENT SIDE — clean up pre-allocated C strings
+        free(cExec)
+        free(cDir)
+        for i in 0..<args.count { free(argv[i]) }
+        argv.deallocate()
+        for i in 0..<env.count { free(envp[i]) }
+        envp.deallocate()
+
         return (pid, master)
     }
     
