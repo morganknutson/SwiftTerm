@@ -305,6 +305,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             settingBg = true
             _nativeBg = newValue
             terminal.backgroundColor = nativeBackgroundColor.getTerminalColor ()
+            layer?.backgroundColor = newValue.cgColor
+            colorsChanged()
             settingBg = false
         }
     }
