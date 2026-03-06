@@ -21,13 +21,17 @@ extension CaretView {
         context.setFillColor(TTColor.clear.cgColor)
         context.fill ([bounds])
         
+        // Resolve caretColor at draw time (not the cached bgColor) so that
+        // dynamic NSColors resolve in the correct appearance context.
+        let resolvedCaret = caretColor.cgColor
+
         if !hasFocus {
-            context.setStrokeColor(bgColor)
+            context.setStrokeColor(resolvedCaret)
             context.setLineWidth(3)
             context.stroke(bounds)
             return
         }
-        context.setFillColor(bgColor)
+        context.setFillColor(resolvedCaret)
         let region: CGRect
         switch style {
         case .blinkBar, .steadyBar:
