@@ -141,6 +141,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
      */
     public var notifyUpdateChanges = false
 
+    /// If true, the caret remains visible even when the terminal application
+    /// sends DECTCEM (CSI ?25l) to hide the cursor.
+    public var neverHideCaret: Bool = false
+
     /// If true, the caret view will show different shapes depending on the focus
     /// otherwise, it will behave like it is focused
     public var caretViewTracksFocus: Bool {
