@@ -20,12 +20,12 @@ class AccessibilityService {
 
 extension TerminalView {
     override open func isAccessibilityElement() -> Bool {
-        NSLog("[Dictation] isAccessibilityElement called — returning true")
+        dictLog("isAccessibilityElement — returning true")
         return true
     }
 
     override open func accessibilityRole() -> NSAccessibility.Role? {
-        NSLog("[Dictation] accessibilityRole called — returning .textArea")
+        dictLog("accessibilityRole — returning .textArea")
         return .textArea
     }
 
@@ -33,37 +33,37 @@ extension TerminalView {
         let rows = terminal.rows
         let cols = terminal.cols
         guard rows > 0, cols > 0 else {
-            NSLog("[Dictation] accessibilityValue called — returning nil (rows:%d cols:%d)", rows, cols)
+            dictLog("accessibilityValue — returning nil (rows:\(rows) cols:\(cols))")
             return nil
         }
         let text = terminal.getText(
             start: Position(col: 0, row: 0),
             end: Position(col: cols, row: rows - 1)
         )
-        NSLog("[Dictation] accessibilityValue called — returning %d chars", text.count)
+        dictLog("accessibilityValue — returning \(text.count) chars")
         return text
     }
 
     override open func setAccessibilityValue(_ value: Any?) {
-        NSLog("[Dictation] setAccessibilityValue called — value type: %@", String(describing: type(of: value)))
+        dictLog("setAccessibilityValue — value type: \(type(of: value))")
         guard let text = value as? String else { return }
-        NSLog("[Dictation] setAccessibilityValue sending to terminal — text: \"%@\"", text)
+        dictLog("setAccessibilityValue sending — text: \"\(text)\"")
         send(txt: text)
     }
 
     override open func accessibilitySelectedTextRange() -> NSRange {
         let range = selectedRange()
-        NSLog("[Dictation] accessibilitySelectedTextRange called — returning %@", NSStringFromRange(range))
+        dictLog("accessibilitySelectedTextRange — returning \(NSStringFromRange(range))")
         return range
     }
 
     override open func accessibilitySelectedText() -> String? {
         guard let sel = selection, sel.active else {
-            NSLog("[Dictation] accessibilitySelectedText called — no active selection")
+            dictLog("accessibilitySelectedText — no active selection")
             return nil
         }
         let text = sel.getSelectedText()
-        NSLog("[Dictation] accessibilitySelectedText called — returning \"%@\"", text)
+        dictLog("accessibilitySelectedText — returning \"\(text)\"")
         return text
     }
 }

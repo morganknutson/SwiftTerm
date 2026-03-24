@@ -15,6 +15,21 @@ import AppKit
 import CoreText
 import CoreGraphics
 
+// File-based debug logging for dictation — tail -f /tmp/dictation-debug.log
+private let _dictationLogFile: FileHandle? = {
+    let path = "/tmp/dictation-debug.log"
+    FileManager.default.createFile(atPath: path, contents: nil)
+    return FileHandle(forWritingAtPath: path)
+}()
+
+func dictLog(_ msg: String) {
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(msg)\n"
+    if let data = line.data(using: .utf8) {
+        _dictationLogFile?.seekToEndOfFile()
+        _dictationLogFile?.write(data)
+    }
+}
+
 /**
  * TerminalView provides an AppKit front-end to the `Terminal` termininal emulator.
  * It is up to a subclass to either wire the terminal emulator to a remote terminal
@@ -563,10 +578,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     public override func becomeFirstResponder() -> Bool {
         let response = super.becomeFirstResponder()
-        NSLog("[Dictation] becomeFirstResponder — result: %d, inputContext: %@, inputContext.client: %@",
-              response ? 1 : 0,
-              String(describing: inputContext),
-              String(describing: inputContext?.client))
+        dictLog("becomeFirstResponder — result: \(response), inputContext: \(String(describing: inputContext)), client: \(String(describing: inputContext?.client))")
         if response {
             hasFocus = true
             caretView.updateCursorStyle()
@@ -577,7 +589,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     public override func resignFirstResponder() -> Bool {
         let response = super.resignFirstResponder()
-        NSLog("[Dictation] resignFirstResponder — result: %d", response ? 1 : 0)
+        dictLog("resignFirstResponder — result: \(response)")
         if response {
             caretView.disableAnimations()
             hasFocus = false
@@ -680,11 +692,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         selection.active = false
         let eventFlags = event.modifierFlags
 
-        NSLog("[Dictation] keyDown — keyCode: %d, chars: \"%@\", modifiers: %lu, isFunction: %d",
-              event.keyCode,
-              event.charactersIgnoringModifiers ?? "(nil)",
-              eventFlags.rawValue,
-              eventFlags.contains(.function) ? 1 : 0)
+        dictLog("keyDown — keyCode: \(event.keyCode), chars: \"\(event.charactersIgnoringModifiers ?? "(nil)")\", modifiers: \(eventFlags.rawValue), isFunction: \(eventFlags.contains(.function))")
 
         // Handle Option-letter to send the ESC sequence plus the letter as expected by terminals
         if eventFlags.contains ([.option, .command]) {
@@ -840,20 +848,20 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // instead of the two-arg NSTextInputClient version)
     override open func insertText(_ string: Any) {
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? String(describing: string)
-        NSLog("[Dictation] insertText(single-arg) called — type: %@, text: \"%@\", currentEvent: %@", String(describing: type(of: string)), text, NSApp.currentEvent?.description ?? "nil")
+        dictLog("insertText(single-arg) — type: \(type(of: string)), text: \"\(text)\", currentEvent: \(NSApp.currentEvent?.description ?? "nil")")
         insertText(string, replacementRange: NSRange(location: NSNotFound, length: 0))
     }
 
     // NSTextInputClient protocol implementation
     open func insertText(_ string: Any, replacementRange: NSRange) {
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? String(describing: string)
-        NSLog("[Dictation] insertText(two-arg) called — type: %@, text: \"%@\", replacementRange: %@, currentEvent: %@", String(describing: type(of: string)), text, NSStringFromRange(replacementRange), NSApp.currentEvent?.description ?? "nil")
+        dictLog("insertText(two-arg) — type: \(type(of: string)), text: \"\(text)\", range: \(NSStringFromRange(replacementRange)), currentEvent: \(NSApp.currentEvent?.description ?? "nil")")
         insertText(string, replacementRange: replacementRange, isPaste: false)
     }
 
     func insertText(_ string: Any, replacementRange: NSRange, isPaste: Bool) {
         if let str = string as? NSString {
-            NSLog("[Dictation] insertText(three-arg) sending to terminal — text: \"%@\", isPaste: %d", str, isPaste ? 1 : 0)
+            dictLog("insertText(three-arg) sending to terminal — text: \"\(str)\", isPaste: \(isPaste)")
             if isPaste, terminal.bracketedPasteMode {
                 send(data: EscapeSequences.bracketedPasteStart[0...])
             }
@@ -862,25 +870,25 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
                 send(data: EscapeSequences.bracketedPasteEnd[0...])
             }
         } else {
-            NSLog("[Dictation] insertText(three-arg) string is NOT NSString — type: %@, value: %@", String(describing: type(of: string)), String(describing: string))
+            dictLog("insertText(three-arg) NOT NSString — type: \(type(of: string)), value: \(string)")
         }
     }
 
     // NSTextInputClient protocol implementation
     open func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? String(describing: string)
-        NSLog("[Dictation] setMarkedText called — text: \"%@\", selectedRange: %@, replacementRange: %@", text, NSStringFromRange(selectedRange), NSStringFromRange(replacementRange))
+        dictLog("setMarkedText — text: \"\(text)\", selectedRange: \(NSStringFromRange(selectedRange)), replacementRange: \(NSStringFromRange(replacementRange))")
     }
 
     // NSTextInputClient protocol implementation
     open func unmarkText() {
-        NSLog("[Dictation] unmarkText called")
+        dictLog("unmarkText called")
     }
 
     // NSTextInputClient protocol implementation
     open func selectedRange() -> NSRange {
         guard let selection = self.selection, selection.active else {
-            NSLog("[Dictation] selectedRange called — no active selection, returning empty")
+            dictLog("selectedRange — no active selection, returning empty")
             return NSRange.empty
         }
 
@@ -892,36 +900,36 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         let length = endLocation - startLocation
         if length == 0 {
-            NSLog("[Dictation] selectedRange called — zero-length selection, returning empty")
+            dictLog("selectedRange — zero-length, returning empty")
             return NSRange.empty
         }
         let range = NSRange(location: startLocation, length: endLocation - startLocation)
-        NSLog("[Dictation] selectedRange called — returning %@", NSStringFromRange(range))
+        dictLog("selectedRange — returning \(NSStringFromRange(range))")
         return range
     }
 
     // NSTextInputClient protocol implementation
     open func markedRange() -> NSRange {
-        NSLog("[Dictation] markedRange called — returning empty (no marked text support)")
+        dictLog("markedRange — returning empty")
         return NSRange.empty
     }
 
     // NSTextInputClient protocol implementation
     open func hasMarkedText() -> Bool {
-        NSLog("[Dictation] hasMarkedText called — returning false")
+        dictLog("hasMarkedText — returning false")
         return false
     }
 
     // NSTextInputClient protocol implementation
     open func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
-        NSLog("[Dictation] attributedSubstring called — proposedRange: %@", NSStringFromRange(range))
+        dictLog("attributedSubstring — proposedRange: \(NSStringFromRange(range))")
         guard range.location != NSNotFound, range.length > 0 else {
-            NSLog("[Dictation] attributedSubstring — returning nil (invalid range)")
+            dictLog("attributedSubstring — returning nil (invalid range)")
             return nil
         }
         let cols = terminal.cols
         guard cols > 0 else {
-            NSLog("[Dictation] attributedSubstring — returning nil (zero cols)")
+            dictLog("attributedSubstring — returning nil (zero cols)")
             return nil
         }
 
@@ -936,13 +944,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             end: Position(col: endCol, row: endRow)
         )
         actualRange?.pointee = range
-        NSLog("[Dictation] attributedSubstring — returning %d chars", text.count)
+        dictLog("attributedSubstring — returning \(text.count) chars")
         return NSAttributedString(string: text, attributes: [.font: fontSet.normal])
     }
 
     // NSTextInputClient Protocol implementation
     open func validAttributesForMarkedText() -> [NSAttributedString.Key] {
-        NSLog("[Dictation] validAttributesForMarkedText called — returning [font, foregroundColor]")
+        dictLog("validAttributesForMarkedText — returning [font, foregroundColor]")
         return [.font, .foregroundColor]
     }
 
@@ -951,18 +959,18 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         actualRange?.pointee = range
 
         if let r = window?.convertToScreen(convert(caretView!.frame, to: nil)) {
-            NSLog("[Dictation] firstRect called — range: %@, returning: %@", NSStringFromRange(range), NSStringFromRect(r))
+            dictLog("firstRect — range: \(NSStringFromRange(range)), rect: \(NSStringFromRect(r))")
             return r
         }
 
-        NSLog("[Dictation] firstRect called — range: %@, returning .zero (no window)", NSStringFromRange(range))
+        dictLog("firstRect — range: \(NSStringFromRange(range)), returning .zero (no window)")
         return .zero
     }
 
     // NSTextInputClient protocol implementation
     open func characterIndex(for point: NSPoint) -> Int {
         guard let cellDimension, cellDimension.width > 0, cellDimension.height > 0 else {
-            NSLog("[Dictation] characterIndex called — returning NSNotFound (no cellDimension)")
+            dictLog("characterIndex — returning NSNotFound (no cellDimension)")
             return NSNotFound
         }
         let local = convert(point, from: nil)
@@ -971,7 +979,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let clampedCol = min(max(0, col), terminal.cols - 1)
         let clampedRow = min(max(0, row), terminal.rows - 1)
         let index = clampedRow * terminal.cols + clampedCol
-        NSLog("[Dictation] characterIndex called — point: %@, mapped to col:%d row:%d, index:%d", NSStringFromPoint(point), clampedCol, clampedRow, index)
+        dictLog("characterIndex — point: \(NSStringFromPoint(point)), col:\(clampedCol) row:\(clampedRow), index:\(index)")
         return index
     }
     
