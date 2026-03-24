@@ -553,8 +553,20 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     //
     // NSTextInputClient protocol implementation
     //
+    // Lazily-created input context so the text input system (and dictation)
+    // always has a valid context for this view.
+    private lazy var _inputContext: NSTextInputContext? = NSTextInputContext(client: self)
+
+    open override var inputContext: NSTextInputContext? {
+        return _inputContext
+    }
+
     public override func becomeFirstResponder() -> Bool {
         let response = super.becomeFirstResponder()
+        NSLog("[Dictation] becomeFirstResponder — result: %d, inputContext: %@, inputContext.client: %@",
+              response ? 1 : 0,
+              String(describing: inputContext),
+              String(describing: inputContext?.client))
         if response {
             hasFocus = true
             caretView.updateCursorStyle()
@@ -562,9 +574,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         return response
     }
-    
+
     public override func resignFirstResponder() -> Bool {
         let response = super.resignFirstResponder()
+        NSLog("[Dictation] resignFirstResponder — result: %d", response ? 1 : 0)
         if response {
             caretView.disableAnimations()
             hasFocus = false
@@ -572,7 +585,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         return response
     }
-    
+
     public override var acceptsFirstResponder: Bool {
         get {
             return true
@@ -666,7 +679,13 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     public override func keyDown(with event: NSEvent) {
         selection.active = false
         let eventFlags = event.modifierFlags
-        
+
+        NSLog("[Dictation] keyDown — keyCode: %d, chars: \"%@\", modifiers: %lu, isFunction: %d",
+              event.keyCode,
+              event.charactersIgnoringModifiers ?? "(nil)",
+              eventFlags.rawValue,
+              eventFlags.contains(.function) ? 1 : 0)
+
         // Handle Option-letter to send the ESC sequence plus the letter as expected by terminals
         if eventFlags.contains ([.option, .command]) {
             if event.charactersIgnoringModifiers == "o" {
