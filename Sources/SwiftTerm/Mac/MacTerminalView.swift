@@ -820,16 +820,21 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     // Bridge for single-arg insertText (called by dictation and Voice Control
     // instead of the two-arg NSTextInputClient version)
     override open func insertText(_ string: Any) {
+        let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? String(describing: string)
+        NSLog("[Dictation] insertText(single-arg) called — type: %@, text: \"%@\", currentEvent: %@", String(describing: type(of: string)), text, NSApp.currentEvent?.description ?? "nil")
         insertText(string, replacementRange: NSRange(location: NSNotFound, length: 0))
     }
 
     // NSTextInputClient protocol implementation
     open func insertText(_ string: Any, replacementRange: NSRange) {
+        let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? String(describing: string)
+        NSLog("[Dictation] insertText(two-arg) called — type: %@, text: \"%@\", replacementRange: %@, currentEvent: %@", String(describing: type(of: string)), text, NSStringFromRange(replacementRange), NSApp.currentEvent?.description ?? "nil")
         insertText(string, replacementRange: replacementRange, isPaste: false)
     }
-    
+
     func insertText(_ string: Any, replacementRange: NSRange, isPaste: Bool) {
         if let str = string as? NSString {
+            NSLog("[Dictation] insertText(three-arg) sending to terminal — text: \"%@\", isPaste: %d", str, isPaste ? 1 : 0)
             if isPaste, terminal.bracketedPasteMode {
                 send(data: EscapeSequences.bracketedPasteStart[0...])
             }
@@ -837,28 +842,29 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             if isPaste, terminal.bracketedPasteMode {
                 send(data: EscapeSequences.bracketedPasteEnd[0...])
             }
+        } else {
+            NSLog("[Dictation] insertText(three-arg) string is NOT NSString — type: %@, value: %@", String(describing: type(of: string)), String(describing: string))
         }
-        // TODO: I do not think we actually need this needsDisplay, the data fed should bubble this up
-        // needsDisplay = true
     }
-    
+
     // NSTextInputClient protocol implementation
     open func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
-        // nothing
+        let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? String(describing: string)
+        NSLog("[Dictation] setMarkedText called — text: \"%@\", selectedRange: %@, replacementRange: %@", text, NSStringFromRange(selectedRange), NSStringFromRange(replacementRange))
     }
-    
+
     // NSTextInputClient protocol implementation
     open func unmarkText() {
-        // nothing
+        NSLog("[Dictation] unmarkText called")
     }
-    
+
     // NSTextInputClient protocol implementation
     open func selectedRange() -> NSRange {
         guard let selection = self.selection, selection.active else {
-            // This means "no selection":
+            NSLog("[Dictation] selectedRange called — no active selection, returning empty")
             return NSRange.empty
         }
-        
+
         let displayBuffer = terminal.displayBuffer
         var startLocation = (selection.start.row * displayBuffer.rows) + selection.start.col
         var endLocation = (selection.end.row * displayBuffer.rows) + selection.end.col
@@ -867,31 +873,38 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
         let length = endLocation - startLocation
         if length == 0 {
+            NSLog("[Dictation] selectedRange called — zero-length selection, returning empty")
             return NSRange.empty
         }
-        return NSRange(location: startLocation, length: endLocation - startLocation)
+        let range = NSRange(location: startLocation, length: endLocation - startLocation)
+        NSLog("[Dictation] selectedRange called — returning %@", NSStringFromRange(range))
+        return range
     }
-    
+
     // NSTextInputClient protocol implementation
     open func markedRange() -> NSRange {
-        print ("markedRange: This should return the actual range from the selection")
-        
-        // This means "no marked" - when we fix, we should address
+        NSLog("[Dictation] markedRange called — returning empty (no marked text support)")
         return NSRange.empty
     }
-    
+
     // NSTextInputClient protocol implementation
     open func hasMarkedText() -> Bool {
-        // print ("hasMarkedText: This should return the actual range from the selection")
-        // TODO
+        NSLog("[Dictation] hasMarkedText called — returning false")
         return false
     }
-    
+
     // NSTextInputClient protocol implementation
     open func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
-        guard range.location != NSNotFound, range.length > 0 else { return nil }
+        NSLog("[Dictation] attributedSubstring called — proposedRange: %@", NSStringFromRange(range))
+        guard range.location != NSNotFound, range.length > 0 else {
+            NSLog("[Dictation] attributedSubstring — returning nil (invalid range)")
+            return nil
+        }
         let cols = terminal.cols
-        guard cols > 0 else { return nil }
+        guard cols > 0 else {
+            NSLog("[Dictation] attributedSubstring — returning nil (zero cols)")
+            return nil
+        }
 
         let startRow = range.location / cols
         let startCol = range.location % cols
@@ -904,28 +917,33 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             end: Position(col: endCol, row: endRow)
         )
         actualRange?.pointee = range
+        NSLog("[Dictation] attributedSubstring — returning %d chars", text.count)
         return NSAttributedString(string: text, attributes: [.font: fontSet.normal])
     }
-    
+
     // NSTextInputClient Protocol implementation
     open func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        NSLog("[Dictation] validAttributesForMarkedText called — returning [font, foregroundColor]")
         return [.font, .foregroundColor]
     }
-    
+
     // NSTextInputClient protocol implementation
     open func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
         actualRange?.pointee = range
-        
+
         if let r = window?.convertToScreen(convert(caretView!.frame, to: nil)) {
+            NSLog("[Dictation] firstRect called — range: %@, returning: %@", NSStringFromRange(range), NSStringFromRect(r))
             return r
         }
-        
+
+        NSLog("[Dictation] firstRect called — range: %@, returning .zero (no window)", NSStringFromRange(range))
         return .zero
     }
-    
+
     // NSTextInputClient protocol implementation
     open func characterIndex(for point: NSPoint) -> Int {
         guard let cellDimension, cellDimension.width > 0, cellDimension.height > 0 else {
+            NSLog("[Dictation] characterIndex called — returning NSNotFound (no cellDimension)")
             return NSNotFound
         }
         let local = convert(point, from: nil)
@@ -933,7 +951,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let row = Int((frame.height - local.y) / cellDimension.height)
         let clampedCol = min(max(0, col), terminal.cols - 1)
         let clampedRow = min(max(0, row), terminal.rows - 1)
-        return clampedRow * terminal.cols + clampedCol
+        let index = clampedRow * terminal.cols + clampedCol
+        NSLog("[Dictation] characterIndex called — point: %@, mapped to col:%d row:%d, index:%d", NSStringFromPoint(point), clampedCol, clampedRow, index)
+        return index
     }
     
     open func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
