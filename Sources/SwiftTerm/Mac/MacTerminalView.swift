@@ -817,6 +817,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    // Bridge for single-arg insertText (called by dictation and Voice Control
+    // instead of the two-arg NSTextInputClient version)
+    override open func insertText(_ string: Any) {
+        insertText(string, replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
+
     // NSTextInputClient protocol implementation
     open func insertText(_ string: Any, replacementRange: NSRange) {
         insertText(string, replacementRange: replacementRange, isPaste: false)
@@ -883,14 +889,27 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     // NSTextInputClient protocol implementation
     open func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
-        print ("Attribuetd string")
-        return nil
+        guard range.location != NSNotFound, range.length > 0 else { return nil }
+        let cols = terminal.cols
+        guard cols > 0 else { return nil }
+
+        let startRow = range.location / cols
+        let startCol = range.location % cols
+        let endLocation = range.location + range.length
+        let endRow = endLocation / cols
+        let endCol = endLocation % cols
+
+        let text = terminal.getText(
+            start: Position(col: startCol, row: startRow),
+            end: Position(col: endCol, row: endRow)
+        )
+        actualRange?.pointee = range
+        return NSAttributedString(string: text, attributes: [.font: fontSet.normal])
     }
     
     // NSTextInputClient Protocol implementation
     open func validAttributesForMarkedText() -> [NSAttributedString.Key] {
-        // TODO print ("validAttributesForMarkedText: This should return the actual range from the selection")
-        return []
+        return [.font, .foregroundColor]
     }
     
     // NSTextInputClient protocol implementation
@@ -906,8 +925,15 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     // NSTextInputClient protocol implementation
     open func characterIndex(for point: NSPoint) -> Int {
-        print ("characterIndex:for point: This should return the actual range from the selection")
-        return NSNotFound
+        guard let cellDimension, cellDimension.width > 0, cellDimension.height > 0 else {
+            return NSNotFound
+        }
+        let local = convert(point, from: nil)
+        let col = Int(local.x / cellDimension.width)
+        let row = Int((frame.height - local.y) / cellDimension.height)
+        let clampedCol = min(max(0, col), terminal.cols - 1)
+        let clampedRow = min(max(0, row), terminal.rows - 1)
+        return clampedRow * terminal.cols + clampedCol
     }
     
     open func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
