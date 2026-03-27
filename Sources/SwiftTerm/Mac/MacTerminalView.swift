@@ -1317,6 +1317,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             } else {
                 scrollDown(lines: lines)
             }
+            updateUserScrolling()
             return
         }
 
@@ -1342,6 +1343,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             }
         }
 
+        updateUserScrolling()
+
         // Reset accumulator when the gesture ends (including momentum end)
         if event.phase == .ended || event.phase == .cancelled ||
            event.momentumPhase == .ended || event.momentumPhase == .cancelled {
@@ -1349,6 +1352,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    /// Syncs Terminal.userScrolling based on whether the viewport is at the bottom.
+    /// When the user scrolls up, new output won't yank the viewport back down.
+    /// When the user scrolls back to the bottom, auto-scroll resumes.
+    private func updateUserScrolling() {
+        let buf = terminal.displayBuffer
+        terminal.userScrolling = buf.yDisp < buf.yBase
+    }
+
     /// Velocity for drag-selection auto-scroll (when dragging past the terminal edges).
     private func autoScrollVelocity(delta: Int) -> Int {
         if delta > 9 { return max(terminal.rows, 20) }

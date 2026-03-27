@@ -1474,10 +1474,10 @@ extension TerminalView {
         userScrolling = true
         let displayBuffer = terminal.displayBuffer
         let oldPosition = displayBuffer.yDisp
-        
+
         let maxScrollback = displayBuffer.lines.count - displayBuffer.rows
         var newScrollPosition = Int (Double (maxScrollback) * toPosition)
-        
+
         if newScrollPosition < 0 {
             newScrollPosition = 0
         }
@@ -1489,6 +1489,7 @@ extension TerminalView {
             scrollTo(row: newScrollPosition)
         }
         userScrolling = false
+        terminal.userScrolling = displayBuffer.yDisp < displayBuffer.yBase
     }
     
     func scrollTo (row: Int, notifyAccessibility: Bool = true)
