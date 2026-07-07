@@ -16,18 +16,25 @@ import CoreText
 import CoreGraphics
 
 // File-based debug logging for dictation — tail -f /tmp/dictation-debug.log
+// Compiled out unless DICTATION_DEBUG is defined: the logger ran a synchronous
+// file write (plus an ISO8601DateFormatter allocation) on every keystroke.
+#if DICTATION_DEBUG
 private let _dictationLogFile: FileHandle? = {
     let path = "/tmp/dictation-debug.log"
     FileManager.default.createFile(atPath: path, contents: nil)
     return FileHandle(forWritingAtPath: path)
 }()
+#endif
 
-func dictLog(_ msg: String) {
-    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(msg)\n"
+@inline(__always)
+func dictLog(_ msg: @autoclosure () -> String) {
+    #if DICTATION_DEBUG
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(msg())\n"
     if let data = line.data(using: .utf8) {
         _dictationLogFile?.seekToEndOfFile()
         _dictationLogFile?.write(data)
     }
+    #endif
 }
 
 /**
@@ -480,6 +487,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// terminal if it has requested the data.   This poses a problem for selection, so users
     /// need a way of toggling this behavior.
     public var allowMouseReporting: Bool = true
+
+    /// When true (the default), sending input to the client scrolls the view to the
+    /// bottom so the caret is visible — the behavior users expect when typing.
+    /// Embedders can set this to false around programmatic writes (automation, IPC)
+    /// so they don't yank a user who is reading scrollback.
+    public var scrollToBottomOnInput: Bool = true
 
     /**
      * If set to true, this will call the TerminalViewDelegate's rangeChanged method
@@ -1294,6 +1307,36 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             let hit = calculateMouseHit(with: event)
             let button = event.deltaY > 0 ? 64 : 65
             terminal.sendEvent(buttonFlags: button, x: hit.grid.col, y: hit.grid.row, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+            return
+        }
+
+        // Alternate-screen apps (less, vim, htop) have no scrollback — translate
+        // wheel motion into cursor keys (xterm "alternate scroll mode") so the
+        // wheel still works inside apps that don't request mouse events.
+        if terminal.isCurrentBufferAlternate {
+            let lines: Int
+            if event.hasPreciseScrollingDeltas {
+                if event.phase == .began {
+                    scrollDeltaAccumulator = 0
+                }
+                scrollDeltaAccumulator += event.scrollingDeltaY / cellDimension.height
+                lines = Int(scrollDeltaAccumulator)
+                scrollDeltaAccumulator -= CGFloat(lines)
+                if event.phase == .ended || event.phase == .cancelled ||
+                   event.momentumPhase == .ended || event.momentumPhase == .cancelled {
+                    scrollDeltaAccumulator = 0
+                }
+            } else {
+                let magnitude = max(1, Int(abs(event.scrollingDeltaY) / 3))
+                lines = event.scrollingDeltaY > 0 ? magnitude : -magnitude
+            }
+            guard lines != 0 else { return }
+            let key: [UInt8] = lines > 0
+                ? (terminal.applicationCursor ? EscapeSequences.moveUpApp : EscapeSequences.moveUpNormal)
+                : (terminal.applicationCursor ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal)
+            for _ in 0..<abs(lines) {
+                send(data: key[...])
+            }
             return
         }
 

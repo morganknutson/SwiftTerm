@@ -127,7 +127,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
      * does not do anything, and selection and panning are still processed.
      */
     public var allowMouseReporting: Bool = true
-    
+
+    /// When true (the default), sending input to the client scrolls the view to the
+    /// bottom so the caret is visible — the behavior users expect when typing.
+    /// Embedders can set this to false around programmatic writes (automation, IPC)
+    /// so they don't yank a user who is reading scrollback.
+    public var scrollToBottomOnInput: Bool = true
+
     /**
      * If set, this turns Option-letter keystrokes into an escape + keystroke combination
      * which is convenient when you are an Emacs user for example.   But this means that

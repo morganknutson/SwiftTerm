@@ -1590,7 +1590,9 @@ extension TerminalView {
      */
     public func send(data: ArraySlice<UInt8>)
     {
-        ensureCaretIsVisible ()
+        if scrollToBottomOnInput {
+            ensureCaretIsVisible ()
+        }
         #if os(iOS) || os(visionOS)
         if TerminalView.textInputDebugEnabled {
             let previewBytes = data.prefix(32).map { String(format: "%02X", $0) }.joined(separator: " ")
