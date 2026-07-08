@@ -139,9 +139,12 @@ extension TerminalView {
     /// Returns true if this changed the number of columns/rows, false otherwise
     @discardableResult
     func processSizeChange (newSize: CGSize) -> Bool {
-        let newRows = Int (newSize.height / cellDimension.height)
-        let newCols = Int (getEffectiveWidth (size: newSize) / cellDimension.width)
-        
+        // Clamp to the same minimums Terminal.resize enforces internally, so
+        // degenerate sizes (mid-drag transients, zero-size layout passes) never
+        // produce a 0×0 grid in delegate callbacks, PTY winsize, or caret math.
+        let newRows = max (Int (newSize.height / cellDimension.height), terminal.MINIMUM_ROWS)
+        let newCols = max (Int (getEffectiveWidth (size: newSize) / cellDimension.width), terminal.MINIMUM_COLS)
+
         if newCols != terminal.cols || newRows != terminal.rows {
             selection.active = false
             terminal.resize (cols: newCols, rows: newRows)
