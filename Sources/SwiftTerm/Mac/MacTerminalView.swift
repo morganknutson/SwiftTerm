@@ -1301,9 +1301,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             return
         }
 
-        // If the application running in the terminal wants mouse events,
-        // forward scroll events to it instead of scrolling the buffer.
-        if allowMouseReporting && terminal.mouseMode.sendButtonPress() {
+        // If the application running in the terminal wants mouse events, forward
+        // wheel motion to it only while it holds the alternate screen (vim, htop,
+        // tmux). Primary-screen TUIs like Claude Code keep their transcript in the
+        // normal buffer and auto-jump their own wheel-scrolled view on new output,
+        // so for them the wheel scrolls our scrollback instead — which stays
+        // anchored. Option+wheel forwards to primary-screen apps that want it.
+        if allowMouseReporting && terminal.mouseMode.sendButtonPress() &&
+            (terminal.isCurrentBufferAlternate || event.modifierFlags.contains(.option)) {
             let hit = calculateMouseHit(with: event)
             let button = event.deltaY > 0 ? 64 : 65
             terminal.sendEvent(buttonFlags: button, x: hit.grid.col, y: hit.grid.row, pixelX: hit.pixels.col, pixelY: hit.pixels.row)

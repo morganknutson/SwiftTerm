@@ -2202,7 +2202,16 @@ open class Terminal {
             clearAllKittyImages()
             updateRange (0)
         case 3:
-            // Clear scrollback (everything not in viewport)
+            // Clear scrollback (everything not in viewport). Skipped while the
+            // user is scrolled up reading history: full-repaint TUIs (Ink/Claude
+            // Code) emit 2J+3J on every frame that overflows the screen, and
+            // honoring it mid-read would delete the content under the viewport
+            // and slam yDisp to the bottom. The duplicate transcript copies such
+            // apps re-print accumulate only until the user returns to the bottom,
+            // where the next 3J collapses them again.
+            if userScrolling {
+                break
+            }
             let scrollBackSize = buffer.lines.count - rows
             if scrollBackSize > 0 {
                 buffer.lines.trimStart (count: scrollBackSize)
