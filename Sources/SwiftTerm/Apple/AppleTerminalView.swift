@@ -1286,6 +1286,13 @@ extension TerminalView {
     /// Update visible area
     func updateDisplay (notifyAccessibility: Bool)
     {
+        if terminal.isSynchronizedOutputActive {
+            // A synchronized-output frame (mode 2026) is open: hold the redraw and
+            // keep the accumulated update range. synchronizedOutputChanged queues a
+            // display update when the frame closes.
+            pendingDisplay = false
+            return
+        }
         updateCursorPosition()
         guard let (rowStart, rowEnd) = terminal.getUpdateRange () else {
             if notifyUpdateChanges {

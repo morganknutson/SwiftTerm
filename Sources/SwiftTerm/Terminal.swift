@@ -326,17 +326,27 @@ open class Terminal {
     public private(set) var buffer: Buffer
 
     private let synchronizedOutputTimeoutSeconds: TimeInterval = 1.0
+    private let synchronizedOutputMaxPendingBytes = 4 * 1024 * 1024
     private var synchronizedOutputActive: Bool = false
-    private var synchronizedOutputBuffer: Buffer?
-    private var synchronizedOutputBufferIsAlternate: Bool = false
+    private var synchronizedOutputPending: [UInt8] = []
+    private var synchronizedOutputScanState: SynchronizedOutputScanState = .ground
+    private var synchronizedOutputTimeoutGeneration = 0
     private var synchronizedOutputTimeoutItem: DispatchWorkItem?
 
+    /// Whether a synchronized-output frame (DEC private mode 2026) is currently open.
+    /// While a frame is open, input that arrives in subsequent feed calls is held
+    /// unparsed, and views should defer redraws until `synchronizedOutputChanged`
+    /// reports the frame closed.
+    public var isSynchronizedOutputActive: Bool {
+        synchronizedOutputActive
+    }
+
     var displayBuffer: Buffer {
-        synchronizedOutputBuffer ?? buffer
+        buffer
     }
 
     var isDisplayBufferAlternate: Bool {
-        synchronizedOutputBuffer != nil ? synchronizedOutputBufferIsAlternate : isCurrentBufferAlternate
+        isCurrentBufferAlternate
     }
     
     public var isCurrentBufferAlternate: Bool {
@@ -4672,6 +4682,10 @@ open class Terminal {
      */
     public func parse (buffer: ArraySlice<UInt8>)
     {
+        if synchronizedOutputActive {
+            bufferSynchronizedOutput (buffer)
+            return
+        }
         parser.parse(data: buffer)
     }
      
@@ -4856,7 +4870,7 @@ open class Terminal {
     /// for a soft reset see `softReset`
     public func resetToInitialState ()
     {
-        endSynchronizedOutput ()
+        abortSynchronizedOutput ()
         options.rows = rows
         options.cols = cols
         let savedCursorHidden = cursorHidden
@@ -5166,7 +5180,7 @@ open class Terminal {
         if newCols == self.cols && newRows == self.rows {
             return
         }
-        endSynchronizedOutput ()
+        abortSynchronizedOutput ()
         let oldCols = self.cols
         resizeBuffers(newColumns: newCols, newRows: newRows)
         self.cols = newCols
@@ -5204,14 +5218,7 @@ open class Terminal {
     private func beginSynchronizedOutput ()
     {
         let wasActive = synchronizedOutputActive
-        if !synchronizedOutputActive {
-            synchronizedOutputActive = true
-            synchronizedOutputBuffer = snapshotBuffer(buffer)
-            synchronizedOutputBufferIsAlternate = isCurrentBufferAlternate
-        } else if synchronizedOutputBuffer == nil {
-            synchronizedOutputBuffer = snapshotBuffer(buffer)
-            synchronizedOutputBufferIsAlternate = isCurrentBufferAlternate
-        }
+        synchronizedOutputActive = true
         scheduleSynchronizedOutputTimeout()
         if !wasActive {
             tdel?.synchronizedOutputChanged(source: self, active: true)
@@ -5224,62 +5231,115 @@ open class Terminal {
             return
         }
         synchronizedOutputActive = false
-        synchronizedOutputBuffer = nil
-        synchronizedOutputBufferIsAlternate = false
         synchronizedOutputTimeoutItem?.cancel()
         synchronizedOutputTimeoutItem = nil
-        refresh (startRow: 0, endRow: rows - 1)
         tdel?.synchronizedOutputChanged(source: self, active: false)
+    }
+
+    /// Applies any held bytes and force-closes an open synchronized-output frame.
+    /// Used when the terminal is reset or resized while a frame is open.
+    private func abortSynchronizedOutput ()
+    {
+        flushSynchronizedOutputPending()
+        endSynchronizedOutput()
+    }
+
+    // While mode 2026 is active, input that arrives after the opening chunk is held
+    // here unparsed, so a partially-transmitted frame can never become visible. The
+    // held bytes are scanned incrementally for the closing `CSI ? 2026 l`; when it
+    // arrives (or the size cap or timeout hits) everything is parsed in one shot.
+    private func bufferSynchronizedOutput (_ data: ArraySlice<UInt8>)
+    {
+        let foundEnd = scanForSynchronizedOutputEnd (data)
+        synchronizedOutputPending.append (contentsOf: data)
+        if foundEnd || synchronizedOutputPending.count > synchronizedOutputMaxPendingBytes {
+            flushSynchronizedOutputPending ()
+        }
+    }
+
+    private func flushSynchronizedOutputPending ()
+    {
+        synchronizedOutputScanState = .ground
+        guard !synchronizedOutputPending.isEmpty else {
+            return
+        }
+        let pending = synchronizedOutputPending
+        synchronizedOutputPending = []
+        parser.parse(data: pending [...])
+    }
+
+    private enum SynchronizedOutputScanState {
+        case ground
+        case escape
+        case csi(privatePrefix: Bool, param: Int, has2026: Bool)
+    }
+
+    // Incremental scan for a `CSI ? ... l` sequence whose parameter list includes
+    // 2026 (the synchronized-output frame terminator). Scanner state persists
+    // across chunks so a terminator split over PTY reads is still found.
+    private func scanForSynchronizedOutputEnd (_ data: ArraySlice<UInt8>) -> Bool
+    {
+        var state = synchronizedOutputScanState
+        var found = false
+        for byte in data {
+            switch state {
+            case .ground:
+                if byte == 0x1b { state = .escape }
+            case .escape:
+                if byte == UInt8 (ascii: "[") {
+                    state = .csi(privatePrefix: false, param: 0, has2026: false)
+                } else if byte != 0x1b {
+                    state = .ground
+                }
+            case .csi(let privatePrefix, let param, let has2026):
+                switch byte {
+                case UInt8 (ascii: "?"):
+                    state = .csi(privatePrefix: true, param: param, has2026: has2026)
+                case UInt8 (ascii: "0")...UInt8 (ascii: "9"):
+                    state = .csi(privatePrefix: privatePrefix, param: min (param * 10 + Int (byte - 0x30), 99999), has2026: has2026)
+                case UInt8 (ascii: ";"):
+                    state = .csi(privatePrefix: privatePrefix, param: 0, has2026: has2026 || param == 2026)
+                case 0x1b:
+                    state = .escape
+                case 0x40...0x7e:
+                    if byte == UInt8 (ascii: "l") && privatePrefix && (has2026 || param == 2026) {
+                        found = true
+                    }
+                    state = .ground
+                default:
+                    // Intermediate and control bytes inside the sequence: keep scanning.
+                    break
+                }
+            }
+        }
+        synchronizedOutputScanState = state
+        return found
     }
 
     private func scheduleSynchronizedOutputTimeout ()
     {
         synchronizedOutputTimeoutItem?.cancel()
+        synchronizedOutputTimeoutGeneration += 1
+        let generation = synchronizedOutputTimeoutGeneration
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.synchronizedOutputActive else {
+            guard let self, self.synchronizedOutputActive,
+                  self.synchronizedOutputTimeoutGeneration == generation else {
                 return
             }
-            self.endSynchronizedOutput()
+            // The application never closed the frame — apply whatever arrived and
+            // force the frame shut so output cannot stall indefinitely.
+            self.flushSynchronizedOutputPending()
+            if self.synchronizedOutputActive && self.synchronizedOutputTimeoutGeneration == generation {
+                self.endSynchronizedOutput()
+            }
         }
         synchronizedOutputTimeoutItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + synchronizedOutputTimeoutSeconds, execute: workItem)
     }
 
-    private func snapshotBuffer (_ source: Buffer) -> Buffer
-    {
-        let copy = Buffer(cols: source.cols, rows: source.rows, tabStopWidth: tabStopWidth, scrollback: source.scrollback)
-        copy.xDisp = source.xDisp
-        copy.yDisp = source.yDisp
-        copy.xBase = source.xBase
-        copy.linesTop = source.linesTop
-        copy.yBase = source.yBase
-        copy.x = source.x
-        copy.y = source.y
-        copy.scrollTop = source.scrollTop
-        copy.scrollBottom = source.scrollBottom
-        copy.tabStops = source.tabStops
-        copy.savedX = source.savedX
-        copy.savedY = source.savedY
-        copy.savedOriginMode = source.savedOriginMode
-        copy.savedMarginMode = source.savedMarginMode
-        copy.savedWraparound = source.savedWraparound
-        copy.savedReverseWraparound = source.savedReverseWraparound
-        copy.marginLeft = source.marginLeft
-        copy.marginRight = source.marginRight
-        copy.savedAttr = source.savedAttr
-        copy.savedCharset = source.savedCharset
-        copy.scrollback = source.scrollback
-
-        for idx in 0..<source.lines.count {
-            copy.lines.push(BufferLine(from: source.lines[idx]))
-        }
-        return copy
-    }
-
     func setViewYDisp (_ newValue: Int)
     {
         buffer.yDisp = newValue
-        synchronizedOutputBuffer?.yDisp = newValue
     }
 
     /**
