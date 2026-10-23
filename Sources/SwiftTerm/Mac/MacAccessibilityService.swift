@@ -68,3 +68,10 @@ extension TerminalView {
     }
 }
 #endif
+
+#if os(iOS) || os(visionOS)
+/// The iOS view keeps the same accessibility hook as the Mac's; it has nothing to refresh yet.
+class AccessibilityService {
+    func invalidate() {}
+}
+#endif
