@@ -408,7 +408,12 @@ open class Terminal {
     var gLevel: UInt8 = 0
     var cursorBlink: Bool = false
     
-    var allow80To132 = true
+    /// DECSET 40, whether DECCOLM may switch the screen between 80 and 132
+    /// columns. Off by default, like xterm's allowColumnMode: terminfo init and
+    /// reset strings (`is2`/`rs2`, sent by `tput init`, `reset` and screen) carry
+    /// `CSI ? 3 l`, and honoring it shrinks the grid to 80 columns inside a view
+    /// that stays wider.
+    var allow80To132 = false
     
     public var parser: EscapeSequenceParser
     var kittyGraphicsState = KittyGraphicsState()
@@ -818,7 +823,7 @@ open class Terminal {
         cc.send8bit = false
         conformance = .vt500
         
-        allow80To132 = true
+        allow80To132 = false
         
         xtermTitleSetUtf = false
         xtermTitleQueryUtf = false

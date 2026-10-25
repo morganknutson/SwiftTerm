@@ -93,4 +93,19 @@ final class TerminalCoreTests {
 
         TerminalTestHarness.assertCursor(terminal.buffer, col: 3, row: 1)
     }
+
+    @Test func testInitStringDoesNotResizeTheGrid() {
+        // xterm-256color's is2/rs2, sent by `tput init`, `reset` and screen
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 100, rows: 5)
+        terminal.feed(text: "\(esc)[!p\(esc)[?3;4l\(esc)[4l\(esc)>")
+        #expect(terminal.cols == 100)
+        terminal.feed(text: "\(esc)[?3h")
+        #expect(terminal.cols == 100)
+    }
+
+    @Test func testColumnModeResizesOnlyWhenEnabled() {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 100, rows: 5)
+        terminal.feed(text: "\(esc)[?40h\(esc)[?3l")
+        #expect(terminal.cols == 80)
+    }
 }
