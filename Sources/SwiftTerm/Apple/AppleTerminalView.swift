@@ -516,7 +516,8 @@ extension TerminalView {
             
             // Blank cells have no ink, so they are left out of the shaped text
             if glyphText != " " {
-                builder.appendText (glyphText, column: col, attribute: attribute, style: style)
+                builder.appendText (glyphText, column: col, attribute: attribute, style: style,
+                                    font: symbolFallbackFont (for: character, style: style, line: line, col: col, width: width, cols: cols))
             }
             col += width
         }
@@ -524,6 +525,27 @@ extension TerminalView {
         return builder.build (selection: selectedColumnsRange (row: row, cols: cols), images: line.images)
     }
     
+    /// The font for a private-use icon the cell's font has no glyph for. The icon
+    /// fills its cell, or two cells when it is followed by a blank, which is how
+    /// prompts and file listers lay out Nerd Font icons.
+    private func symbolFallbackFont (for character: Character, style: CellStyle, line: BufferLine, col: Int, width: Int, cols: Int) -> CTFont?
+    {
+        let scalars = character.unicodeScalars
+        guard scalars.count == 1, let scalar = scalars.first, SymbolFallbackFont.isPrivateUse (scalar),
+              let textFont = style.textAttributes [.font] as? TTFont,
+              !SymbolFallbackFont.font (textFont, hasGlyphFor: scalar) else {
+            return nil
+        }
+        var columns = width
+        if col + width < cols {
+            let next = line [col + width]
+            if next.code == 0 || next.code == 0x20 {
+                columns += 1
+            }
+        }
+        return SymbolFallbackFont.shared.font (width: cellDimension.width * CGFloat (columns), textFont: textFont)
+    }
+
     /// Returns the selection range for the specified row, if any.
     func selectedColumnsRange(row: Int, cols: Int) -> Range<Int>? {
         guard let selection = self.selection, selection.active else {

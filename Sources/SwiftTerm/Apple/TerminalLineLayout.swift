@@ -131,8 +131,14 @@ struct ViewLineInfo {
 struct ViewLineInfoBuilder {
     private var text = ""
     private var columnForUTF16: [Int] = []
+    /// Cells whose text can share one attributed range.
+    private struct TextRunKey: Equatable {
+        let attribute: Attribute
+        let font: ObjectIdentifier?
+    }
+
     private var textRuns: [(range: NSRange, attributes: [NSAttributedString.Key: Any])] = []
-    private var currentTextAttribute: Attribute?
+    private var currentTextRunKey: TextRunKey?
     private var backgrounds: [CellColorRun] = []
     private var decorations: [CellDecorationRun] = []
     private(set) var customGlyphs: [CustomGlyphRenderItem] = []
@@ -142,8 +148,9 @@ struct ViewLineInfoBuilder {
         columnForUTF16.reserveCapacity(columns)
     }
 
-    /// Adds the text drawn for the cell at `column`.
-    mutating func appendText(_ string: String, column: Int, attribute: Attribute, style: CellStyle) {
+    /// Adds the text drawn for the cell at `column`, with `font` replacing the
+    /// style's font when given.
+    mutating func appendText(_ string: String, column: Int, attribute: Attribute, style: CellStyle, font: CTFont? = nil) {
         let length = string.utf16.count
         guard length > 0 else {
             return
@@ -151,11 +158,16 @@ struct ViewLineInfoBuilder {
         let location = columnForUTF16.count
         text += string
         columnForUTF16.append(contentsOf: repeatElement(column, count: length))
-        if currentTextAttribute == attribute, let last = textRuns.last {
+        let key = TextRunKey(attribute: attribute, font: font.map { ObjectIdentifier($0) })
+        if currentTextRunKey == key, let last = textRuns.last {
             textRuns[textRuns.count - 1].range = NSRange(location: last.range.location, length: last.range.length + length)
         } else {
-            textRuns.append((NSRange(location: location, length: length), style.textAttributes))
-            currentTextAttribute = attribute
+            var attributes = style.textAttributes
+            if let font {
+                attributes[.font] = font
+            }
+            textRuns.append((NSRange(location: location, length: length), attributes))
+            currentTextRunKey = key
         }
     }
 

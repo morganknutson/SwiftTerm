@@ -4,8 +4,14 @@ import PackageDescription
 
 #if os(Linux) || os(Windows)
 let platformExcludes = ["Apple", "Mac", "iOS"]
+let platformResources: [Resource] = []
 #else
 let platformExcludes: [String] = []
+// The fallback font for Nerd Font icons, see SymbolFallbackFont.swift
+let platformResources: [Resource] = [
+    .copy("Apple/Resources/SymbolsNerdFontMono-Regular.ttf"),
+    .copy("Apple/Resources/SymbolsNerdFont-LICENSE.txt"),
+]
 #endif
 
 #if os(Windows)
@@ -60,6 +66,7 @@ let targets: [Target] = [
 //        ],
         path: "Sources/SwiftTerm",
         exclude: platformExcludes + ["Mac/README.md"],
+        resources: platformResources
 //        swiftSettings: [
 //            .unsafeFlags(["-enforce-exclusivity=none"])
 //        ]

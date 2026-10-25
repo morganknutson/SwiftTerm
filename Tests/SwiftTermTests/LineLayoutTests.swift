@@ -71,6 +71,25 @@ final class LineLayoutTests {
         #expect(!info.text.string.contains("▀"))
     }
 
+    @Test func testPrivateUseIconsFallBackToTheSymbolFont() {
+        let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 400, height: 100))
+        view.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        view.resize(cols: 20, rows: 2)
+        // Nerd Font icons followed by a blank (as prompts print them) and by text
+        view.feed(text: "\u{F07B} \u{F09B}x")
+        let terminal = view.getTerminal()
+        let info = view.buildLineInfo(row: 0, line: terminal.buffer.lines[0], cols: terminal.cols)
+        let folder = info.text.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
+        let github = info.text.attribute(.font, at: 1, effectiveRange: nil) as! NSFont
+        let text = info.text.attribute(.font, at: 2, effectiveRange: nil) as! NSFont
+        #expect(folder.fontName == "SymbolsNFM")
+        #expect(github.fontName == "SymbolsNFM")
+        #expect(text.fontName != "SymbolsNFM")
+        // An icon fills its cell, or two when a blank follows, never larger than the text
+        #expect(abs(folder.pointSize - min(2 * view.cellDimension.width, 12)) < 0.001)
+        #expect(abs(github.pointSize - view.cellDimension.width) < 0.001)
+    }
+
     @Test func testCellWidthIsPixelAligned() {
         let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 400, height: 100))
         let scale = view.backingScaleFactor()
