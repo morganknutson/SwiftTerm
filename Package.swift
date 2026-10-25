@@ -42,6 +42,7 @@ let targets: [Target] = [
 let products: [Product] = [
     .executable(name: "SwiftTermFuzz", targets: ["SwiftTermFuzz"]),
     .executable(name: "termcast", targets: ["Termcast"]),
+    .executable(name: "terminal-fixture", targets: ["TerminalFixture"]),
     .library(
         name: "SwiftTerm",
         targets: ["SwiftTerm"]
@@ -75,6 +76,14 @@ let targets: [Target] = [
             .product(name: "ArgumentParser", package: "swift-argument-parser")
         ],
         path: "Sources/Termcast"
+    ),
+    .executableTarget (
+        name: "TerminalFixture",
+        dependencies: [
+            "SwiftTerm",
+            .product(name: "ArgumentParser", package: "swift-argument-parser")
+        ],
+        path: "Sources/TerminalFixture"
     ),
     .testTarget(
         name: "SwiftTermTests",
