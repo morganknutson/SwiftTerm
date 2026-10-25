@@ -176,10 +176,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     var attrStrBuffer: CircularList<ViewLineInfo>!
     var images:[(image: TerminalImage, col: Int, row: Int)] = []
 
-    // Attribute dictionary, maps a console attribute (color, flags) to the corresponding dictionary
-    // of attributes for an NSAttributedString
-    var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
-    var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+    // Maps a console attribute (color, flags) to how cells using it are drawn
+    var cellStyles: [Attribute: CellStyle] = [:]
 
     // Timer to display the terminal buffer
     var link: CADisplayLink!

@@ -127,10 +127,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     var selection: SelectionService!
     private var scroller: NSScroller!
     
-    // Attribute dictionary, maps a console attribute (color, flags) to the corresponding dictionary
-    // of attributes for an NSAttributedString
-    var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
-    var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+    // Maps a console attribute (color, flags) to how cells using it are drawn
+    var cellStyles: [Attribute: CellStyle] = [:]
     
     
     // Cache for the colors in the 0..255 range
@@ -538,7 +536,40 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         guard let currentContext = getCurrentGraphicsContext() else {
             return
         }
+        // Start from the default background: cells only paint backgrounds that differ
+        // from it. AppKit has already cleared the dirty region of this non-opaque
+        // view, so a transparent default lets whatever is behind the view show through.
+        let background = nativeBackgroundColor.cgColor
+        if background.alpha > 0 {
+            currentContext.setFillColor (background)
+            currentContext.fill (dirtyRect)
+        }
         drawTerminalContents (dirtyRect: dirtyRect, context: currentContext, bufferOffset: terminal.displayBuffer.yDisp)
+    }
+
+    open override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateCellDimensionForBackingScale()
+    }
+
+    open override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateCellDimensionForBackingScale()
+    }
+
+    /// The cell grid is aligned to device pixels, so moving to a display with a
+    /// different backing scale can change the cell size and the column count.
+    private func updateCellDimensionForBackingScale() {
+        let dimension = computeFontDimensions()
+        guard dimension != cellDimension else {
+            return
+        }
+        cellDimension = dimension
+        updateCaretView()
+        processSizeChange(newSize: frame.size)
+        updateCursorPosition()
+        terminal.updateFullScreen()
+        needsDisplay = true
     }
     
     public override func cursorUpdate(with event: NSEvent)

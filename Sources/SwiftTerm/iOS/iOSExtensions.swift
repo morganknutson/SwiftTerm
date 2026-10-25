@@ -19,12 +19,6 @@ extension UIColor {
         return Color(red: UInt16 (clamp (red)*65535), green: UInt16(clamp (green)*65535), blue: UInt16(clamp (blue)*65535))
     }
 
-    func inverseColor() -> UIColor {
-        var red: CGFloat = 0.0, green: CGFloat = 0.0, blue: CGFloat = 0.0, alpha: CGFloat = 1.0
-        self.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        return UIColor (red: 1.0 - red, green: 1.0 - green, blue: 1.0 - blue, alpha: alpha)
-    }
-
     /// Returns a dimmed version of the color (for SGR 2 faint/dim text attribute)
     /// Reduces the color intensity by approximately 50%
     func dimmedColor() -> UIColor {
