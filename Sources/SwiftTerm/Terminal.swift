@@ -3476,6 +3476,8 @@ open class Terminal {
         var fg = curAttr.fg
         var bg = curAttr.bg
         var underlineColor = curAttr.underlineColor
+        var underlineStyle = curAttr.underlineStyle
+        var overline = curAttr.overline
         let def = CharData.defaultAttr
 
         var i = 0
@@ -3586,6 +3588,19 @@ open class Terminal {
             return color
         }
         
+        // Parses the color that follows 38, 48 or 58 at `i` and moves past it. In
+        // the colon form every sub-parameter belongs to the color, so the whole
+        // group is consumed even when it is malformed and the color is ignored.
+        func parseExtendedColorGroup () -> Attribute.Color? {
+            let groupEnd = i + countColons(from: i)
+            i += 1
+            let color = parseExtendedColor ()
+            if groupEnd >= i {
+                i = groupEnd + 1
+            }
+            return color
+        }
+
         while i < parCount {
             var p = pars [i]
             switch p {
@@ -3595,6 +3610,8 @@ open class Terminal {
                 fg = def.fg
                 bg = def.bg
                 underlineColor = def.underlineColor
+                underlineStyle = def.underlineStyle
+                overline = def.overline
             case 1:
                 // bold text
                 style = [style, .bold]
@@ -3605,8 +3622,31 @@ open class Terminal {
                 // italic text
                 style = [style, .italic]
             case 4:
-                // underlined text
-                style = [style, .underline]
+                // underlined text, `4:n` selects the underline shape
+                if countColons(from: i) > 0, i + 1 < parCount {
+                    switch pars [i + 1] {
+                    case 0:
+                        style.remove (.underline)
+                    case 2:
+                        style = [style, .underline]
+                        underlineStyle = .double
+                    case 3:
+                        style = [style, .underline]
+                        underlineStyle = .curly
+                    case 4:
+                        style = [style, .underline]
+                        underlineStyle = .dotted
+                    case 5:
+                        style = [style, .underline]
+                        underlineStyle = .dashed
+                    default:
+                        style = [style, .underline]
+                        underlineStyle = .single
+                    }
+                } else {
+                    style = [style, .underline]
+                    underlineStyle = .single
+                }
             case 5:
                 // blink
                 style = [style, .blink]
@@ -3621,7 +3661,8 @@ open class Terminal {
                 style = [style, .crossedOut]
             case 21:
                 // double underline
-                break
+                style = [style, .underline]
+                underlineStyle = .double
             case 22:
                 // not bold nor faint
                 style.remove (.bold)
@@ -3648,8 +3689,7 @@ open class Terminal {
                 // fg color 8
                 fg = Attribute.Color.ansi256(code: UInt8(p - 30))
             case 38:
-                i += 1
-                if let parsed = parseExtendedColor () {
+                if let parsed = parseExtendedColorGroup () {
                     fg = parsed
                 }
                 continue
@@ -3660,8 +3700,7 @@ open class Terminal {
                 // bg color 8
                 bg = Attribute.Color.ansi256(code: UInt8(p - 40))
             case 48:
-                i += 1
-                if let parsed = parseExtendedColor() {
+                if let parsed = parseExtendedColorGroup () {
                     bg = parsed
                 }
                 continue
@@ -3679,8 +3718,7 @@ open class Terminal {
                 bg = Attribute.Color.ansi256(code: UInt8(p - 100))
                 
             case 58:
-                i += 1
-                if let parsed = parseExtendedColor() {
+                if let parsed = parseExtendedColorGroup () {
                     underlineColor = parsed
                 }
                 continue
@@ -3688,13 +3726,25 @@ open class Terminal {
             case 59:
                 // reset underline color
                 underlineColor = nil
-                
+
+            case 53:
+                overline = true
+            case 55:
+                // not overlined
+                overline = false
+
             default:
-                print ("Unknown SGR attribute: \(p) \(pars)")
+                break
             }
-            i += 1
+            // Colon-separated sub-parameters belong to the parameter that was just
+            // processed (for example `4:3`), they are never attributes of their own.
+            i += 1 + countColons(from: i)
         }
-        curAttr = Attribute(fg: fg, bg: bg, style: style, underlineColor: underlineColor)
+        if !style.contains (.underline) {
+            // Keep a single representation for "not underlined" so attribute caches stay small
+            underlineStyle = .single
+        }
+        curAttr = Attribute(fg: fg, bg: bg, style: style, underlineColor: underlineColor, underlineStyle: underlineStyle, overline: overline)
     }
 
     //

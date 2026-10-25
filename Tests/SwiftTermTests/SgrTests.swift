@@ -84,4 +84,51 @@ final class SgrTests {
         #expect(setCell.attribute.underlineColor == .trueColor(red: 9, green: 8, blue: 7))
         #expect(resetCell.attribute.underlineColor == nil)
     }
+
+    private func cells(_ sequence: String, count: Int) -> [CharData] {
+        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 20, rows: 1)
+        terminal.feed(text: sequence)
+        return (0..<count).compactMap { TerminalTestHarness.charData(buffer: terminal.buffer, row: 0, col: $0) }
+    }
+
+    @Test func testUnderlineStyleSubParameters() {
+        let row = cells("\(esc)[4mA\(esc)[4:2mB\(esc)[4:3mC\(esc)[4:4mD\(esc)[4:5mE\(esc)[4:0mF", count: 6)
+        #expect(row.count == 6)
+        guard row.count == 6 else { return }
+        let expected: [UnderlineStyle] = [.single, .double, .curly, .dotted, .dashed]
+        for (cell, style) in zip(row, expected) {
+            #expect(cell.attribute.style.contains(.underline))
+            #expect(cell.attribute.underlineStyle == style)
+        }
+        #expect(!row[5].attribute.style.contains(.underline))
+    }
+
+    @Test func testUnderlineSubParameterIsNotAnAttribute() {
+        // 4:3 is a curly underline, not underline + italic; 4:2 is double, not dim
+        let row = cells("\(esc)[4:3mA\(esc)[0;4:2mB", count: 2)
+        #expect(row.count == 2)
+        guard row.count == 2 else { return }
+        #expect(!row[0].attribute.style.contains(.italic))
+        #expect(!row[1].attribute.style.contains(.dim))
+        #expect(row[1].attribute.underlineStyle == .double)
+    }
+
+    @Test func testDoubleUnderlineAndOverline() {
+        let row = cells("\(esc)[21mA\(esc)[24;53mB\(esc)[55mC", count: 3)
+        #expect(row.count == 3)
+        guard row.count == 3 else { return }
+        #expect(row[0].attribute.style.contains(.underline))
+        #expect(row[0].attribute.underlineStyle == .double)
+        #expect(!row[1].attribute.style.contains(.underline))
+        #expect(row[1].attribute.overline)
+        #expect(!row[2].attribute.overline)
+    }
+
+    @Test func testUnderlineStyleResetsWithUnderline() {
+        // "Not underlined" has a single representation so equal cells compare equal
+        let row = cells("\(esc)[4:3mA\(esc)[24mB\(esc)[0mC", count: 3)
+        #expect(row.count == 3)
+        guard row.count == 3 else { return }
+        #expect(row[1].attribute == row[2].attribute)
+    }
 }

@@ -50,6 +50,16 @@ public struct CharacterStyle : OptionSet, Hashable {
     public static let crossedOut = CharacterStyle (rawValue: 128)
 }
 
+/// The shape of the line drawn for underlined text, selected with `SGR 4:n`
+/// (and `SGR 21` for double).  Only meaningful when the style contains `.underline`.
+public enum UnderlineStyle: UInt8 {
+    case single
+    case double
+    case curly
+    case dotted
+    case dashed
+}
+
 ///
 /// Attribute contains the foreground and background color information for the invidual
 /// cells, as well as the character style of the cell (bold, underline, inverse) that the character
@@ -102,10 +112,16 @@ public struct Attribute: Equatable, Hashable {
     public private(set) var style: CharacterStyle
     /// Optional underline color
     public private(set) var underlineColor: Color? = nil
+    /// The underline shape, used when `style` contains `.underline`
+    public private(set) var underlineStyle: UnderlineStyle = .single
+    /// Draw a line above the text (SGR 53). Kept out of `CharacterStyle`, whose
+    /// eight bits are all used, so the attribute stays byte-aligned and the cell
+    /// storage does not grow.
+    public private(set) var overline: Bool = false
     
     public static func ==(lhs: Attribute, rhs: Attribute) -> Bool
     {
-        lhs.style == rhs.style && lhs.fg == rhs.fg && lhs.bg == rhs.bg && lhs.underlineColor == rhs.underlineColor
+        lhs.style == rhs.style && lhs.fg == rhs.fg && lhs.bg == rhs.bg && lhs.underlineColor == rhs.underlineColor && lhs.underlineStyle == rhs.underlineStyle && lhs.overline == rhs.overline
     }
     
     // Returns an attribute with just the colors
