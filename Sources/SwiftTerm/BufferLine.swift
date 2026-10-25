@@ -153,6 +153,35 @@ public final class BufferLine: CustomDebugStringConvertible {
         }
     }
     
+    /// Cells `[start, start + width)` are about to be overwritten, erased, or split
+    /// by an insertion or deletion. A wide character that only partly overlaps them
+    /// is erased whole: its remaining cells become blanks that keep their colors.
+    /// Otherwise the part that is not touched is left behind as an orphaned cell.
+    func eraseWideCharacterFragments (from start: Int, width: Int)
+    {
+        let length = dataSize
+        let end = min (start + width, length)
+        func blank (_ col: Int) {
+            data [col] = CharData (attribute: data [col].attribute.justColor ())
+        }
+        // A wide character that begins before the span and reaches into it
+        if start > 0, start < length, data [start].width == 0 {
+            var lead = start - 1
+            while lead > 0 && data [lead].width == 0 {
+                lead -= 1
+            }
+            for col in lead..<start {
+                blank (col)
+            }
+        }
+        // A wide character that begins inside the span and continues past it
+        var col = end
+        while col < length && data [col].width == 0 {
+            blank (col)
+            col += 1
+        }
+    }
+    
     /// Replaces the cells in the start to end range with the specified fill data
     public func replaceCells (start: Int, end: Int, fillData : CharData)
     {

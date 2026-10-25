@@ -1908,8 +1908,11 @@ open class Terminal {
         }
         let cd = CharData (attribute: eraseAttr ())
         let buffer = self.buffer
+        let line = buffer.lines [buffer.y + buffer.yBase]
         
-        buffer.lines [buffer.y + buffer.yBase].insertCells (pos: buffer.x, n: pars.count > 0 ? max (pars [0], 1) : 1, rightMargin: marginMode ? buffer.marginRight : cols-1, fillData: cd)
+        // Inserting inside a wide character splits it, so it is erased first
+        line.eraseWideCharacterFragments (from: buffer.x, width: 0)
+        line.insertCells (pos: buffer.x, n: pars.count > 0 ? max (pars [0], 1) : 1, rightMargin: marginMode ? buffer.marginRight : cols-1, fillData: cd)
 
         updateRange (buffer.y)
     }
@@ -2249,6 +2252,7 @@ open class Terminal {
             buffer.clearImagesFromLine(at: buffer.yBase + y)
         }
         let cd = CharData (attribute: eraseAttr ())
+        line.eraseWideCharacterFragments (from: start, width: end - start)
         line.replaceCells (start: start, end: end, fillData: cd)
         if clearWrap {
             line.isWrapped = false
@@ -2572,7 +2576,7 @@ open class Terminal {
             
             for row in buffer.scrollTop...buffer.scrollBottom {
                 let line = buffer.lines [row+buffer.yBase]
-                line.insertCells(pos: buffer.x, n: n, rightMargin: marginMode ? buffer.marginRight : cols-1, fillData: buffer.getNullCell())
+                line.insertCells(pos: buffer.x, n: n, rightMargin: marginMode ? buffer.marginRight : cols-1, fillData: buffer.getNullCell(attribute: eraseAttr()))
                 line.isWrapped = false
             }
             return
@@ -4449,8 +4453,10 @@ open class Terminal {
     func cmdEraseChars (_ pars: [Int], _ collect: cstring)
     {
         let p = max (pars.count == 0 ? 1 : pars [0], 1)
+        let line = buffer.lines [buffer.y + buffer.yBase]
 
-        buffer.lines [buffer.y + buffer.yBase].replaceCells (
+        line.eraseWideCharacterFragments (from: buffer.x, width: p)
+        line.replaceCells (
             start: buffer.x,
             end: buffer.x + p,
             fillData: CharData (attribute:  eraseAttr ()))
@@ -4547,7 +4553,9 @@ open class Terminal {
         if buffer.x == buffer.cols {
             return
         }
-        buffer.lines [buffer.y + buffer.yBase].deleteCells (
+        let line = buffer.lines [buffer.y + buffer.yBase]
+        line.eraseWideCharacterFragments (from: buffer.x, width: p)
+        line.deleteCells (
             pos: buffer.x, n: p, rightMargin: marginMode ? buffer.marginRight : cols-1, fillData: CharData (attribute: eraseAttr ()))
         
         updateRange (buffer.y)
@@ -4965,7 +4973,7 @@ open class Terminal {
         for y in buffer.scrollTop...buffer.scrollBottom {
             let line = buffer.lines [buffer.yBase + y]
             if back {
-                line.insertCells(pos: at, n: 1, rightMargin: marginMode ? buffer.marginRight : cols-1, fillData: buffer.getNullCell())
+                line.insertCells(pos: at, n: 1, rightMargin: marginMode ? buffer.marginRight : cols-1, fillData: buffer.getNullCell(attribute: eraseAttr()))
             } else {
                 line.deleteCells(pos: at, n: 1, rightMargin: marginMode ? buffer.marginRight : cols-1, fillData: buffer.getNullCell(attribute: eraseAttr()))
             }

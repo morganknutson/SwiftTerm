@@ -250,7 +250,6 @@ public final class Buffer {
         }
     }
     
-    private var curAttr: Attribute = Attribute.empty
     private var insertMode: Bool = false
     private var marginMode: Bool = false
     private var wraparound: Bool = false
@@ -1162,11 +1161,14 @@ public final class Buffer {
             }
         }
         let bufferRow = _lines[_y+_yBase]
-        var empty = CharData.Null
-        empty.attribute = curAttr
-        let wideEmpty = CharData(attribute: curAttr, scalar: UnicodeScalar(0)!, size: 0)
+        let empty = getNullCell (attribute: charData.attribute)
+        // The cells a wide character covers past its first carry its attributes, so
+        // its background spans all of them
+        let wideEmpty = CharData(attribute: charData.attribute, scalar: UnicodeScalar(0)!, size: 0)
         // insert mode: move characters to right
         if insertMode {
+            // inserting inside a wide character splits it, so it is erased first
+            bufferRow.eraseWideCharacterFragments (from: _x, width: 0)
             // right shift cells according to the width
             bufferRow.insertCells (pos: _x, n: chWidth, rightMargin: marginMode ? marginRight : _cols-1, fillData: empty)
             // test last cell - since the last cell has only room for
@@ -1183,6 +1185,7 @@ public final class Buffer {
         if _x >= _cols {
             _x = _cols-1
         }
+        bufferRow.eraseWideCharacterFragments (from: _x, width: max (1, chWidth))
         bufferRow[_x] = charData
         _x += 1
         
